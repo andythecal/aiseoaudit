@@ -1,0 +1,35 @@
+# Private machine configuration; only the safe application example is versioned.
+/config/*.php
+!/config/app.example.php
+
+# Deployment scripts, configuration and generated manifests stay local.
+deploy*.php
+/.deploy-manifest.json
+/bin/local-setup.php
+
+# Audits, sessions, logs, PDF caches, research data and QA artifacts.
+/storage/*
+!/storage/.htaccess
+!/storage/.gitkeep
+*.log
+
+# Environment files, keys and local backups.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.bak
+*.backup
+*.sql.gz
+*.sql.zip
+
+# Machine-specific tooling and editor state.
+/.codex/
+/.agents/
+/.aws/
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db

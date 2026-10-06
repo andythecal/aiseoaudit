@@ -1,0 +1,55 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const nodes=new Map();
+const document={querySelector(selector){if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',value:selector==='#account-state'?'all':'',hidden:false,disabled:false,open:false,classList:{add(){},remove(){}},focus(){},scrollIntoView(){},insertAdjacentHTML(_,html){this.innerHTML+=html;},showModal(){this.open=true;},close(){this.open=false;}});return nodes.get(selector);}};
+const context=vm.createContext({document,console,URL,URLSearchParams,history:{replaceState(){}},location:{pathname:'/'},setTimeout,clearTimeout});
+const source=fs.readFileSync('assets/app.js','utf8');
+vm.runInContext(source.slice(0,source.indexOf("\n$('#audit-form').addEventListener")),context);
+const el=s=>document.querySelector(s);
+const account={email:'member@example.test',createdAt:'2026-01-01 12:00:00Z',plan:'Free account',counts:{total:1,completed:1,failed:0,running:0},browserAudits:{count:2,shouldPrompt:true}};
+const row={id:'abc',final_url:'https://example.test/<script>unsafe</script>',score:20,state:'complete',created_at:'2026-01-02 12:00:00',has_deep:1};
+const calls=[];
+context.fakeApi=async(action,data,query)=>{
+ calls.push({action,data,query});
+ if(action==='account')return {account:JSON.parse(JSON.stringify(account))};
+ if(action==='history')return {audits:[row],total:account.counts.total,nextCursor:null};
+ if(action==='browser-audits'){
+   const imported=data.decision==='import'?account.browserAudits.count:0;
+   account.counts.total+=imported;account.browserAudits={count:account.browserAudits.count-imported,shouldPrompt:false};
+   return {imported,browserAudits:account.browserAudits};
+ }
+ throw Error('Unexpected '+action);
+};
+vm.runInContext("api=fakeApi;toast=()=>{};currentUser={id:7,email:'member@example.test'};allowance={basic:{remaining:99,limit:100},deep:{remaining:3,limit:3}}",context);
+(async()=>{
+ await vm.runInContext('openMyAccount()',context);
+ assert.equal(el('#my-account').hidden,false);assert.equal(el('#audit-workspace').hidden,true);
+ assert.equal(el('#account-email').textContent,'member@example.test');
+ assert(el('#account-stats').innerHTML.includes('99'));
+ assert(el('#account-list').innerHTML.includes('&lt;script&gt;unsafe&lt;/script&gt;')&&!el('#account-list').innerHTML.includes('<script>'));
+ assert(el('#account-list').innerHTML.includes('In-depth review saved'));
+ assert(calls.some(c=>c.action==='history'&&c.query.includes('scope=account')));
+ assert.equal(el('#account-import').hidden,false);
+ el('#account-search').value='test%_';el('#account-state').value='failed';
+ await vm.runInContext('loadAccountHistory()',context);
+ const query=calls.filter(c=>c.action==='history').at(-1).query;
+ assert(query.includes('q=test%25_')&&query.includes('state=failed'));
+ let decision=vm.runInContext('askBrowserImport()',context);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(el('#browser-import-dialog').open,true);
+ assert(el('#browser-import-description').textContent.includes('2 earlier audits'));
+ assert(!calls.some(c=>c.action==='browser-audits'));
+ await vm.runInContext("chooseBrowserImport('decline')",context);
+ assert.equal(await decision,false);assert.equal(account.browserAudits.count,2);assert.equal(el('#browser-import-dialog').open,false);
+ decision=vm.runInContext('askBrowserImport()',context);await new Promise(resolve=>setImmediate(resolve));
+ await vm.runInContext("chooseBrowserImport('import')",context);
+ assert.equal(await decision,true);assert.equal(account.counts.total,3);assert.equal(el('#account-import').hidden,true);
+ assert(!calls.some(c=>['audit','deepen'].includes(c.action)));
+ vm.runInContext('showAuditWorkspace()',context);assert.equal(el('#my-account').hidden,true);assert.equal(el('#audit-workspace').hidden,false);
+ vm.runInContext('currentUser=null;openMyAccount()',context);assert.equal(el('#account-dialog').open,true);
+ assert.equal(vm.runInContext('pendingMemberAction.kind',context),'account');
+ const markup=fs.readFileSync('index.php','utf8');
+ const ids=[...markup.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);assert.equal(ids.length,new Set(ids).size,'No duplicate IDs');
+ for(const match of source.matchAll(/\$\('#([a-z-]+)'\)/g))assert(ids.includes(match[1])||source.includes('id="'+match[1]+'"'),'DOM hook exists: '+match[1]);
+ console.log('PASS: Account navigation, scoped history, escaping, filters, explicit import/decline, zero-credit import and markup hooks.');
+})().catch(e=>{console.error(e);process.exitCode=1;});
